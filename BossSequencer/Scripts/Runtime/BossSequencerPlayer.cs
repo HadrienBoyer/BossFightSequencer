@@ -66,6 +66,9 @@ public class BossSequencerPlayer : MonoBehaviour
                 {
                     Debug.Log($"[Sequencer] Boss exécute pattern : {clip.patternData.patternName}");
                     boss.animator?.SetTrigger(clip.patternData.animationTrigger);
+
+                    var demoBoss = boss.GetComponent<DemoBossController>();
+                    if (demoBoss != null) demoBoss.OnPatternExecute(clip.patternData);
                 }
                 break;
 

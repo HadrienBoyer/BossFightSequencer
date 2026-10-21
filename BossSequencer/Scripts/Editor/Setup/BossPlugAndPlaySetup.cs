@@ -146,23 +146,36 @@ public static class BossPlugAndPlaySetup
 
         AssetDatabase.SaveAssets();
 
-        // 6. Instanciation dans la scène active (Boss GameObject + HUD Canvas)
+        // 6. Instanciation dans la scène active (Arène NavMesh + Prefabs DemoPlayer & DemoBoss + HUD Canvas)
         SetupSceneGameObjects(profile, timelineP1, timelineP2, sfxPhaseChange);
 
         EditorUtility.DisplayDialog(
             "⚡ Plug & Play Boss Setup Terminé !",
-            "Le premier Boss complet a été configuré avec succès :\n\n" +
-            "• Boss GameObject créé dans la scène (avec Stats & Multi-Timeline)\n" +
-            "• Canvas HUD complet créé (Barres PV + Poise + Feedbacks de phase & dégâts)\n" +
-            "• Composant 'BossFightDebugTester' ajouté pour tester les dégâts et transitions instantanément !\n\n" +
-            "Lancez le Play Mode et cliquez sur les boutons pour tester !",
-            "C'est parti !"
+            "Le setup 100% fonctionnel a été généré :\n\n" +
+            "• Arène avec sol NavMesh (Static)\n" +
+            "• Prefab 'DemoPlayerController' (Déplacement ZQSD/Flèches + Visée souris + Clic gauche pour attaquer)\n" +
+            "• Prefab 'DemoBossController' (Navigation NavMeshAgent vers le joueur + vitesse dynamique selon les phases + tirs de projectiles synchronisés avec la Timeline)\n" +
+            "• Canvas HUD réactif (PV, Poise, Timer, Flash, Bannières)\n\n" +
+            "N'oubliez pas de générer le NavMesh (Window > AI > Navigation > Bake) si ce n'est pas déjà fait !",
+            "Compris !"
         );
     }
 
     private static void SetupSceneGameObjects(BossCharacterProfile profile, BossTimelineSequence p1, BossTimelineSequence p2, AudioFeedbackDefinition phaseSfx)
     {
-        // 1. HUD Canvas
+        // 1. Sol d'Arène (NavMesh Static)
+        var floor = GameObject.Find("Arena_Floor");
+        if (floor == null)
+        {
+            floor = GameObject.CreatePrimitive(PrimitiveType.Plane);
+            floor.name = "Arena_Floor";
+            floor.transform.position = Vector3.zero;
+            floor.transform.localScale = new Vector3(5, 1, 5); // 50m x 50m
+            floor.GetComponent<Renderer>().sharedMaterial.color = new Color(0.18f, 0.2f, 0.22f);
+            GameObjectUtility.SetStaticEditorFlags(floor, StaticEditorFlags.NavigationStatic);
+        }
+
+        // 2. HUD Canvas
         var hudObj = GameObject.Find("BossFight_HUD");
         if (hudObj == null)
         {
@@ -174,55 +187,96 @@ public static class BossPlugAndPlaySetup
             BuildHUDUI(hudObj);
         }
 
-        // 2. Boss GameObject
-        var bossObj = GameObject.Find("Boss_Malakor");
+        // 3. Joueur : DemoPlayerController (Prefab)
+        var playerObj = GameObject.Find("DemoPlayer");
+        if (playerObj == null)
+        {
+            playerObj = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            playerObj.name = "DemoPlayer";
+            playerObj.tag = "Player";
+            playerObj.transform.position = new Vector3(0, 1f, -12f);
+            playerObj.GetComponent<Renderer>().sharedMaterial.color = new Color(0.2f, 0.8f, 0.4f); // Vert
+
+            // Remplacement du CapsuleCollider par CharacterController
+            var col = playerObj.GetComponent<CapsuleCollider>();
+            if (col != null) Object.DestroyImmediate(col);
+
+            var cc = playerObj.AddComponent<CharacterController>();
+            cc.height = 2f;
+            cc.center = Vector3.up;
+
+            playerObj.AddComponent<DemoPlayerController>();
+
+            // Sauvegarde en Prefab
+            string playerPrefabPath = $"{ASSET_ROOT}/DemoPlayerController.prefab";
+            PrefabUtility.SaveAsPrefabAsset(playerObj, playerPrefabPath);
+        }
+
+        // 4. Boss : DemoBossController (Prefab + NavMeshAgent)
+        var bossObj = GameObject.Find("DemoBoss");
         if (bossObj == null)
         {
             bossObj = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            bossObj.name = "Boss_Malakor";
-            bossObj.transform.position = new Vector3(0, 1.5f, 5);
-            bossObj.transform.localScale = new Vector3(2, 3, 2);
-            bossObj.GetComponent<Renderer>().sharedMaterial.color = new Color(0.85f, 0.2f, 0.2f);
+            bossObj.name = "DemoBoss";
+            bossObj.transform.position = new Vector3(0, 1.5f, 8f);
+            bossObj.transform.localScale = new Vector3(2.5f, 3f, 2.5f);
+            var bossRenderer = bossObj.GetComponent<Renderer>();
+            bossRenderer.sharedMaterial.color = new Color(0.85f, 0.2f, 0.2f); // Rouge
+
+            // NavMeshAgent
+            var agent = bossObj.AddComponent<UnityEngine.AI.NavMeshAgent>();
+            agent.speed = profile.stats.baseMoveSpeed;
+            agent.acceleration = 16f;
+            agent.angularSpeed = 240f;
+            agent.stoppingDistance = 3.5f;
+
+            var controller = bossObj.AddComponent<BossController>();
+            var sequencer = bossObj.AddComponent<BossSequencerPlayer>();
+            var tester = bossObj.AddComponent<BossFightDebugTester>();
+            var demoBoss = bossObj.AddComponent<DemoBossController>();
+
+            controller.characterProfile = profile;
+            controller.sequencerPlayer = sequencer;
+            controller.player = playerObj.transform;
+            controller.fightPhases = new List<BossFightPhaseDefinition>
+            {
+                new BossFightPhaseDefinition
+                {
+                    phaseName = "Phase 1 : Awakening",
+                    phaseThemeColor = new Color(0.2f, 0.7f, 1f),
+                    healthThreshold = 1.0f,
+                    timelineSequence = p1,
+                    bannerAlertText = "PHASE 1 : LE SOUVERAIN S'ÉVEILLE",
+                    damageMultiplier = 1.0f,
+                    speedMultiplier = 1.0f,
+                    defenseMultiplier = 1.0f,
+                    transitionSFX = phaseSfx
+                },
+                new BossFightPhaseDefinition
+                {
+                    phaseName = "Phase 2 : Void Fury (Enrage)",
+                    phaseThemeColor = new Color(1f, 0.25f, 0.2f),
+                    healthThreshold = 0.5f,
+                    timelineSequence = p2,
+                    bannerAlertText = "PHASE 2 : RAGE DU NÉANT !",
+                    damageMultiplier = 1.5f,
+                    speedMultiplier = 1.5f, // Boss accélère avec le NavMesh en P2
+                    defenseMultiplier = 1.3f,
+                    transitionSFX = phaseSfx
+                }
+            };
+
+            // Sauvegarde en Prefab
+            string bossPrefabPath = $"{ASSET_ROOT}/DemoBossController.prefab";
+            PrefabUtility.SaveAsPrefabAsset(bossObj, bossPrefabPath);
         }
 
-        var controller = bossObj.GetComponent<BossController>();
-        if (controller == null) controller = bossObj.AddComponent<BossController>();
-
-        var sequencer = bossObj.GetComponent<BossSequencerPlayer>();
-        if (sequencer == null) sequencer = bossObj.AddComponent<BossSequencerPlayer>();
-
-        var tester = bossObj.GetComponent<BossFightDebugTester>();
-        if (tester == null) tester = bossObj.AddComponent<BossFightDebugTester>();
-
-        controller.characterProfile = profile;
-        controller.sequencerPlayer = sequencer;
-        controller.fightPhases = new List<BossFightPhaseDefinition>
+        // Camera setup si besoin
+        if (Camera.main != null)
         {
-            new BossFightPhaseDefinition
-            {
-                phaseName = "Phase 1 : Awakening",
-                phaseThemeColor = new Color(0.2f, 0.7f, 1f),
-                healthThreshold = 1.0f,
-                timelineSequence = p1,
-                bannerAlertText = "PHASE 1 : LE SOUVERAIN S'ÉVEILLE",
-                damageMultiplier = 1.0f,
-                speedMultiplier = 1.0f,
-                defenseMultiplier = 1.0f,
-                transitionSFX = phaseSfx
-            },
-            new BossFightPhaseDefinition
-            {
-                phaseName = "Phase 2 : Void Fury (Enrage)",
-                phaseThemeColor = new Color(1f, 0.25f, 0.2f),
-                healthThreshold = 0.5f,
-                timelineSequence = p2,
-                bannerAlertText = "PHASE 2 : RAGE DU NÉANT !",
-                damageMultiplier = 1.5f,
-                speedMultiplier = 1.4f,
-                defenseMultiplier = 1.3f,
-                transitionSFX = phaseSfx
-            }
-        };
+            Camera.main.transform.position = new Vector3(0, 18, -22);
+            Camera.main.transform.rotation = Quaternion.Euler(45, 0, 0);
+        }
 
         Selection.activeGameObject = bossObj;
     }
