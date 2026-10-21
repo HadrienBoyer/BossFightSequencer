@@ -78,7 +78,15 @@ public class BossSequencerWindow : OdinEditorWindow
             RefreshTimeline();
         }) { text = "+ Ajouter Piste" };
 
-        var helpLabel = new Label("Astuces : Double-clic sur piste = Créer Clip | Glisser = Déplacer | Bord droit = Redimensionner | Clic-droit = Supprimer")
+        var plugAndPlayBtn = new Button(() =>
+        {
+            BossPlugAndPlaySetup.GeneratePlugAndPlayBossFight();
+        }) { text = "⚡ 1-Click Demo Boss Setup" };
+        plugAndPlayBtn.style.backgroundColor = new Color(0.2f, 0.55f, 0.3f);
+        plugAndPlayBtn.style.color = Color.white;
+        plugAndPlayBtn.style.unityFontStyleAndWeight = FontStyle.Bold;
+
+        var helpLabel = new Label("Astuces : Double-clic sur piste = Créer Clip | Glisser = Déplacer | Bord droit = Redimensionner")
         {
             style =
             {
@@ -89,6 +97,7 @@ public class BossSequencerWindow : OdinEditorWindow
         };
 
         toolbar.Add(addTrackBtn);
+        toolbar.Add(plugAndPlayBtn);
         toolbar.Add(helpLabel);
         container.Add(toolbar);
 

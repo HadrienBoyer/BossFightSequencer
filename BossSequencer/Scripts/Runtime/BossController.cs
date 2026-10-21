@@ -1,61 +1,195 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Sirenix.OdinInspector;
 
-public class BossController : MonoBehaviour
+[Serializable]
+public class BossFightPhaseDefinition
 {
-    [Header("Stats")]
-    [SerializeField] private float maxHealth = 1000f;
-    public float CurrentHealth { get; private set; }
+    [HorizontalGroup("PhaseHeader", Width = 0.5f)]
+    public string phaseName = "Phase 1 - Introduction";
 
-    [Header("References")]
+    [HorizontalGroup("PhaseHeader", Width = 0.5f)]
+    public Color phaseThemeColor = new Color(0.2f, 0.7f, 1f);
+
+    [Range(0f, 1f)]
+    [Tooltip("Franchissement de ce pourcentage de PV pour déclencher la phase")]
+    public float healthThreshold = 1.0f;
+
+    [Tooltip("La timeline DAW jouée pendant cette phase")]
+    [InlineEditor]
+    public BossTimelineSequence timelineSequence;
+
+    [Header("Stat Multipliers (Dynamic Evolution)")]
+    public float speedMultiplier = 1.0f;
+    public float damageMultiplier = 1.0f;
+    public float defenseMultiplier = 1.0f;
+
+    [Header("Transition Feedbacks")]
+    public string bannerAlertText = "PHASE 1 INITIÉE";
+    [InlineEditor] public AudioFeedbackDefinition transitionSFX;
+    [InlineEditor] public VisualFeedbackDefinition transitionVFX;
+}
+
+public class BossController : SerializedMonoBehaviour
+{
+    [Title("Profile & Setup")]
+    [InlineEditor]
+    public BossCharacterProfile characterProfile;
+
+    [Title("Dynamic Multi-Timeline Phases")]
+    [ListDrawerSettings(ShowIndexLabels = true)]
+    public List<BossFightPhaseDefinition> fightPhases = new List<BossFightPhaseDefinition>();
+
+    [Title("Runtime Components")]
     public Transform player;
     public Animator animator;
     public Transform arenaCenter;
+    public BossSequencerPlayer sequencerPlayer;
 
-    [Header("Phase Configurations")]
-    public BossPhaseConfig phase1Config;
-    public BossPhaseConfig phase2Config;
+    public float CurrentHealth { get; private set; }
+    public float CurrentPoise { get; private set; }
+    public float MaxHealth => characterProfile != null && characterProfile.stats != null ? characterProfile.stats.maxHealth : 1000f;
+    public float MaxPoise => characterProfile != null && characterProfile.stats != null ? characterProfile.stats.poiseMeter : 100f;
+
+    public int CurrentPhaseIndex { get; private set; } = -1;
+    public bool IsInvulnerable { get; set; } = false;
 
     private IBossState currentState;
-    public bool IsInvulnerable { get; set; } = false;
 
     private void Awake()
     {
-        CurrentHealth = maxHealth;
         if (player == null)
-            player = GameObject.FindGameObjectWithTag("Player")?.transform;
+        {
+            var pObj = GameObject.FindGameObjectWithTag("Player");
+            if (pObj != null) player = pObj.transform;
+        }
+
+        if (sequencerPlayer == null)
+            sequencerPlayer = GetComponent<BossSequencerPlayer>();
+
+        ResetStats();
     }
 
     private void Start()
     {
-        if (phase1Config != null)
-            ChangeState(new BossFightPhaseState(this, phase1Config));
+        if (BossFightHUD.Instance != null && characterProfile != null)
+        {
+            BossFightHUD.Instance.Initialize(
+                characterProfile.bossName,
+                characterProfile.title,
+                MaxHealth,
+                MaxPoise
+            );
+        }
+
+        // Démarre la première phase
+        if (fightPhases.Count > 0)
+        {
+            TransitionToPhase(0);
+        }
     }
 
     private void Update()
     {
         currentState?.Update();
+
+        // Récupération naturelle de Poise
+        if (characterProfile != null && characterProfile.stats != null && CurrentPoise < MaxPoise)
+        {
+            CurrentPoise = Mathf.Min(MaxPoise, CurrentPoise + characterProfile.stats.poiseRecoveryRate * Time.deltaTime);
+            BossFightHUD.Instance?.UpdatePoise(CurrentPoise, MaxPoise);
+        }
+
+        // Progression de la Timeline dans le HUD
+        if (sequencerPlayer != null && CurrentPhaseIndex >= 0 && CurrentPhaseIndex < fightPhases.Count)
+        {
+            var pDef = fightPhases[CurrentPhaseIndex];
+            float total = pDef.timelineSequence != null ? pDef.timelineSequence.totalDuration : 1f;
+            BossFightHUD.Instance?.UpdateTimelineProgress(pDef.phaseName, sequencerPlayer.CurrentPlayhead, total);
+        }
     }
 
-    public void ChangeState(IBossState newState)
+    public void ResetStats()
     {
-        currentState?.Exit();
-        currentState = newState;
-        currentState.Enter();
+        CurrentHealth = MaxHealth;
+        CurrentPoise = MaxPoise;
+    }
+
+    public void TransitionToPhase(int newIndex)
+    {
+        if (newIndex < 0 || newIndex >= fightPhases.Count) return;
+
+        CurrentPhaseIndex = newIndex;
+        var phaseDef = fightPhases[newIndex];
+
+        Debug.Log($"[BossController] Transition vers {phaseDef.phaseName}");
+
+        // HUD Feedback
+        if (BossFightHUD.Instance != null)
+        {
+            BossFightHUD.Instance.ShowPhaseTransitionBanner(phaseDef.bannerAlertText, phaseDef.phaseThemeColor);
+            BossFightHUD.Instance.TriggerDamageFlash(new Color(phaseDef.phaseThemeColor.r, phaseDef.phaseThemeColor.g, phaseDef.phaseThemeColor.b, 0.4f), 0.4f);
+            BossFightHUD.Instance.PushCombatLog($"Transition : {phaseDef.phaseName} (Dmg x{phaseDef.damageMultiplier}, Vit x{phaseDef.speedMultiplier})");
+        }
+
+        // Lancement de la timeline associée à cette phase
+        if (sequencerPlayer != null && phaseDef.timelineSequence != null)
+        {
+            sequencerPlayer.PlayWave(phaseDef.timelineSequence);
+        }
     }
 
     public void TakeDamage(float amount)
     {
-        if (IsInvulnerable) return;
+        if (IsInvulnerable || CurrentHealth <= 0) return;
 
-        CurrentHealth = Mathf.Max(0, CurrentHealth - amount);
-        float hpPercent = CurrentHealth / maxHealth;
+        float defense = 1.0f;
+        if (CurrentPhaseIndex >= 0 && CurrentPhaseIndex < fightPhases.Count)
+            defense = fightPhases[CurrentPhaseIndex].defenseMultiplier;
 
-        if (hpPercent <= 0.5f && !(currentState is BossWaveInterludeState) && phase2Config != null)
+        float effectiveDamage = amount / Mathf.Max(0.1f, defense);
+        CurrentHealth = Mathf.Max(0, CurrentHealth - effectiveDamage);
+
+        // Feedbacks HUD
+        BossFightHUD.Instance?.UpdateHealth(CurrentHealth, MaxHealth);
+        BossFightHUD.Instance?.TriggerDamageFlash(new Color(1f, 0f, 0f, 0.35f), 0.2f);
+        BossFightHUD.Instance?.PushCombatLog($"Boss subit {effectiveDamage:F0} dégâts (PV restants: {CurrentHealth:F0})");
+
+        // Poise damage
+        CurrentPoise = Mathf.Max(0, CurrentPoise - (amount * 0.4f));
+        BossFightHUD.Instance?.UpdatePoise(CurrentPoise, MaxPoise);
+
+        if (CurrentHealth <= 0)
         {
-            ChangeState(new BossWaveInterludeState(this, phase2Config));
+            OnBossDeath();
+            return;
         }
+
+        CheckPhaseProgression();
+    }
+
+    private void CheckPhaseProgression()
+    {
+        float hpPercent = CurrentHealth / MaxHealth;
+
+        for (int i = fightPhases.Count - 1; i > CurrentPhaseIndex; i--)
+        {
+            if (hpPercent <= fightPhases[i].healthThreshold)
+            {
+                TransitionToPhase(i);
+                break;
+            }
+        }
+    }
+
+    private void OnBossDeath()
+    {
+        Debug.Log("[BossController] Boss vaincu !");
+        BossFightHUD.Instance?.ShowPhaseTransitionBanner("BOSS VAINCU !", Color.yellow);
+        BossFightHUD.Instance?.PushCombatLog("Le Boss a été terrassé !");
+        sequencerPlayer?.StopWave();
+        animator?.SetTrigger("Die");
     }
 
     public float DistanceToPlayer()
@@ -63,12 +197,4 @@ public class BossController : MonoBehaviour
         if (player == null) return float.MaxValue;
         return Vector3.Distance(transform.position, player.position);
     }
-}
-
-[Serializable]
-public class BossPhaseConfig
-{
-    public string phaseName = "Phase 1";
-    public List<BossPatternData> availablePatterns = new List<BossPatternData>();
-    public float baseMoveSpeed = 3.5f;
 }
