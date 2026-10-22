@@ -116,31 +116,78 @@ public class DemoBossController : MonoBehaviour
         var projData = pattern.projectilePattern;
         Vector3 spawnOrigin = transform.position + Vector3.up * 1.2f + transform.forward * 1.5f;
 
-        foreach (var wave in projData.waveSteps)
-        {
-            float stepAngle = wave.arcAngle / Mathf.Max(1, wave.projectileCount);
-            float startAngle = -wave.arcAngle * 0.5f + wave.angleOffset;
+        float globalAngleOffset = 0f;
 
-            for (int i = 0; i < wave.projectileCount; i++)
+        for (int stepIndex = 0; stepIndex < projData.waveSteps.Count; stepIndex++)
+        {
+            var wave = projData.waveSteps[stepIndex];
+            int count = Mathf.Max(1, wave.projectileCount);
+            float arc = wave.arcAngle;
+            float stepAngle = arc / count;
+            float startAngle = -arc * 0.5f + wave.angleOffset;
+
+            for (int i = 0; i < count; i++)
             {
-                float currentAngle = startAngle + (i * stepAngle);
-                Quaternion rot = Quaternion.Euler(0, currentAngle, 0) * transform.rotation;
+                float angle = startAngle + (i * stepAngle);
+
+                // Math Spécifique aux Shmups
+                switch (projData.spreadShape)
+                {
+                    case ProjectileSpreadShape.DoubleSpiralOpposed:
+                        // 2 flux inversés
+                        float dirSign = (i % 2 == 0) ? 1f : -1f;
+                        angle += dirSign * (stepIndex * projData.spinSpeed * 0.1f);
+                        break;
+
+                    case ProjectileSpreadShape.RosePetals:
+                        // Modulation du rayon polaire façon rose de Rhodonea r = cos(k * theta)
+                        float rad = (angle + globalAngleOffset) * Mathf.Deg2Rad;
+                        float distMod = 1f + Mathf.Cos(projData.petalCount * rad) * projData.petalDistortion;
+                        angle *= distMod;
+                        break;
+
+                    case ProjectileSpreadShape.WhipSweep:
+                        angle = -arc * 0.5f + (stepIndex * 15f);
+                        break;
+
+                    case ProjectileSpreadShape.PredictiveLead:
+                        if (bossCore.player != null)
+                        {
+                            Vector3 targetPos = bossCore.player.position;
+                            var playerCc = bossCore.player.GetComponent<CharacterController>();
+                            if (playerCc != null)
+                            {
+                                targetPos += playerCc.velocity * projData.leadTimeSeconds;
+                            }
+                            Vector3 toPredicted = (targetPos - spawnOrigin).normalized;
+                            Quaternion predRot = Quaternion.LookRotation(toPredicted);
+                            SpawnSingleBullet(spawnOrigin, predRot * Vector3.forward, projData);
+                            continue;
+                        }
+                        break;
+                }
+
+                Quaternion rot = Quaternion.Euler(0, angle, 0) * transform.rotation;
                 Vector3 shootDir = rot * Vector3.forward;
 
-                // Création d'une bille projectile fonctionnelle
-                GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                sphere.name = "BossProjectile";
-                sphere.transform.position = spawnOrigin;
-                sphere.transform.localScale = Vector3.one * 0.6f;
-                sphere.GetComponent<Renderer>().material.color = Color.magenta;
-
-                var rb = sphere.AddComponent<Rigidbody>();
-                rb.useGravity = false;
-                rb.velocity = shootDir * projData.baseSpeed;
-
-                Destroy(sphere, projData.projectileLifetime);
+                SpawnSingleBullet(spawnOrigin, shootDir, projData);
             }
         }
+    }
+
+    private void SpawnSingleBullet(Vector3 origin, Vector3 direction, ProjectilePatternDefinition projData)
+    {
+        GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        sphere.name = $"ShmupBullet_{projData.spreadShape}";
+        sphere.transform.position = origin;
+        sphere.transform.localScale = Vector3.one * projData.bulletScale;
+        sphere.GetComponent<Renderer>().material.color = projData.bulletColor;
+
+        var col = sphere.GetComponent<SphereCollider>();
+        if (col != null) col.isTrigger = true;
+
+        var behavior = sphere.AddComponent<ShmupBulletBehavior>();
+        behavior.Initialize(projData, direction, bossCore.player);
     }
 
     private void SetBossColor(Color c)

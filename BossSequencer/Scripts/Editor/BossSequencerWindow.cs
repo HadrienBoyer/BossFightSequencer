@@ -22,10 +22,14 @@ public class BossSequencerWindow : OdinEditorWindow
 
     [ShowInInspector, HideReferenceObjectPicker]
     [BoxGroup("Clip Inspector", CenterLabel = true)]
+    [OnValueChanged(nameof(OnClipInspectorChanged))]
     private TimelineClip selectedClip;
 
     private VisualElement timelineContainer;
     private ScrollView timelineScrollView;
+    private VisualElement radarPanel;
+    private RadialProjectilePreviewElement radarPreview;
+    private Slider timeSlider;
 
     private const float PIXELS_PER_SECOND = 40f;
     private const float TRACK_HEIGHT = 55f;
@@ -33,7 +37,133 @@ public class BossSequencerWindow : OdinEditorWindow
     protected override void OnEnable()
     {
         base.OnEnable();
+        EditorApplication.update += OnEditorTick;
         BuildTimelineUI();
+    }
+
+    protected override void OnDisable()
+    {
+        base.OnDisable();
+        EditorApplication.update -= OnEditorTick;
+    }
+
+    private void OnEditorTick()
+    {
+        radarPreview?.Tick(0.016f);
+    }
+
+    private void OnClipInspectorChanged()
+    {
+        UpdateRadarWithClip(selectedClip);
+    }
+
+    private void UpdateRadarWithClip(TimelineClip clip)
+    {
+        if (clip != null && clip.patternData != null && clip.patternData.projectilePattern != null)
+        {
+            radarPreview?.SetPattern(clip.patternData.projectilePattern);
+        }
+    }
+
+    private void BuildRadarPreviewPanel(VisualElement parent)
+    {
+        radarPanel = new VisualElement
+        {
+            style =
+            {
+                width = 300,
+                borderLeftWidth = 2,
+                borderLeftColor = new Color(0.1f, 0.1f, 0.1f),
+                backgroundColor = new Color(0.13f, 0.15f, 0.18f),
+                paddingLeft = 8,
+                paddingRight = 8,
+                paddingTop = 8,
+                paddingBottom = 8
+            }
+        };
+
+        var title = new Label("🎯 RADAR SHMUP 2D PREVIEW")
+        {
+            style =
+            {
+                color = new Color(0.3f, 0.8f, 1f),
+                fontSize = 12,
+                unityFontStyleAndWeight = FontStyle.Bold,
+                marginBottom = 6,
+                alignSelf = Align.Center
+            }
+        };
+        radarPanel.Add(title);
+
+        radarPreview = new RadialProjectilePreviewElement
+        {
+            style =
+            {
+                height = 240,
+                backgroundColor = new Color(0.08f, 0.1f, 0.12f),
+                borderTopLeftRadius = 6,
+                borderBottomLeftRadius = 6,
+                borderTopRightRadius = 6,
+                borderBottomRightRadius = 6,
+                marginBottom = 8
+            }
+        };
+        radarPanel.Add(radarPreview);
+
+        timeSlider = new Slider("Time Scrubber", 0f, 2.5f)
+        {
+            value = 1f
+        };
+        timeSlider.RegisterValueChangedCallback(evt =>
+        {
+            radarPreview.SetAutoAnimate(false);
+            radarPreview.SetSimulationTime(evt.newValue);
+        });
+        radarPanel.Add(timeSlider);
+
+        var playAnimBtn = new Button(() =>
+        {
+            radarPreview.SetAutoAnimate(true);
+        }) { text = "▶️ Auto Animer / Loop" };
+        radarPanel.Add(playAnimBtn);
+
+        var presetsLabel = new Label("✨ Presets Rapides :")
+        {
+            style = { color = Color.gray, fontSize = 11, marginTop = 6, marginBottom = 4 }
+        };
+        radarPanel.Add(presetsLabel);
+
+        var presetRow1 = new VisualElement { style = { flexDirection = FlexDirection.Row, justifyContent = Justify.SpaceBetween } };
+        var p1 = new Button(() => ApplyQuickPreset(0)) { text = "Double Spirale", style = { flexGrow = 1 } };
+        var p2 = new Button(() => ApplyQuickPreset(1)) { text = "Pétales Rose", style = { flexGrow = 1 } };
+        presetRow1.Add(p1);
+        presetRow1.Add(p2);
+        radarPanel.Add(presetRow1);
+
+        var presetRow2 = new VisualElement { style = { flexDirection = FlexDirection.Row, justifyContent = Justify.SpaceBetween, marginTop = 4 } };
+        var p3 = new Button(() => ApplyQuickPreset(2)) { text = "Stop & Go", style = { flexGrow = 1 } };
+        var p4 = new Button(() => ApplyQuickPreset(3)) { text = "Cluster Split", style = { flexGrow = 1 } };
+        presetRow2.Add(p3);
+        presetRow2.Add(p4);
+        radarPanel.Add(presetRow2);
+
+        parent.Add(radarPanel);
+    }
+
+    private void ApplyQuickPreset(int index)
+    {
+        if (selectedClip == null || selectedClip.patternData == null || selectedClip.patternData.projectilePattern == null) return;
+
+        var proj = selectedClip.patternData.projectilePattern;
+        switch (index)
+        {
+            case 0: proj.ApplyPresetDoubleSpiral(); break;
+            case 1: proj.ApplyPresetRosePetals(); break;
+            case 2: proj.ApplyPresetFreezeRelease(); break;
+            case 3: proj.ApplyPresetCluster(); break;
+        }
+        EditorUtility.SetDirty(proj);
+        radarPreview.SetPattern(proj);
     }
 
     private void OnSequenceDataChanged()
@@ -86,6 +216,16 @@ public class BossSequencerWindow : OdinEditorWindow
         plugAndPlayBtn.style.color = Color.white;
         plugAndPlayBtn.style.unityFontStyleAndWeight = FontStyle.Bold;
 
+        var toggleRadarBtn = new Button(() =>
+        {
+            if (radarPanel != null)
+            {
+                radarPanel.style.display = radarPanel.style.display == DisplayStyle.None ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+        }) { text = "🎯 Radar 2D Visualizer" };
+        toggleRadarBtn.style.backgroundColor = new Color(0.2f, 0.4f, 0.6f);
+        toggleRadarBtn.style.color = Color.white;
+
         var helpLabel = new Label("Astuces : Double-clic sur piste = Créer Clip | Glisser = Déplacer | Bord droit = Redimensionner")
         {
             style =
@@ -98,8 +238,19 @@ public class BossSequencerWindow : OdinEditorWindow
 
         toolbar.Add(addTrackBtn);
         toolbar.Add(plugAndPlayBtn);
+        toolbar.Add(toggleRadarBtn);
         toolbar.Add(helpLabel);
         container.Add(toolbar);
+
+        // Container Horizontal : Timeline à gauche + Radar 2D à droite
+        var contentSplit = new VisualElement
+        {
+            style =
+            {
+                flexDirection = FlexDirection.Row,
+                flexGrow = 1
+            }
+        };
 
         timelineScrollView = new ScrollView(ScrollViewMode.Horizontal)
         {
@@ -117,7 +268,12 @@ public class BossSequencerWindow : OdinEditorWindow
         };
 
         timelineScrollView.Add(timelineContainer);
-        container.Add(timelineScrollView);
+        contentSplit.Add(timelineScrollView);
+
+        // Panneau Radar 2D Shmup Preview
+        BuildRadarPreviewPanel(contentSplit);
+
+        container.Add(contentSplit);
         root.Add(container);
 
         RefreshTimeline();
@@ -285,6 +441,7 @@ public class BossSequencerWindow : OdinEditorWindow
         clipEl.RegisterCallback<MouseDownEvent>(evt =>
         {
             selectedClip = clip;
+            UpdateRadarWithClip(clip);
             originalStart = clip.startTime;
             originalDuration = clip.duration;
             startMousePos = evt.mousePosition;
